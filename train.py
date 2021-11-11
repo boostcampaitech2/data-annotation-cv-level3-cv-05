@@ -63,8 +63,13 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     set_seed(seed)
     dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size)
     dataset = EASTDataset(dataset)
-    num_batches = math.ceil(len(dataset) / batch_size)
-    train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+
+    L = len(dataset)
+    valid_dataset, train_dataset = torch.utils.data.random_split(dataset, (L//5,L-(L//5)))
+    num_batches = math.ceil(len(train_dataset) / batch_size)
+    val_num_batches = math.ceil(len(valid_dataset) / batch_size)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
@@ -96,8 +101,35 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
         scheduler.step()
 
-        print('Mean loss: {:.4f} | Elapsed time: {}'.format(
-            epoch_loss / num_batches, timedelta(seconds=time.time() - epoch_start)))
+        val_epoch_loss = 0
+        with tqdm(total=val_num_batches) as pbar:
+            model.eval()
+            for img, gt_score_map, gt_geo_map, roi_mask in valid_loader:
+                pbar.set_description('[Valid {}]'.format(epoch + 1))
+
+                img, gt_score_map, gt_geo_map, roi_mask = (img.to(device), gt_score_map.to(device),
+                                               gt_geo_map.to(device), roi_mask.to(device))
+                pred_score_map, pred_geo_map = model(img)
+
+                loss, values_dict = model.criterion(gt_score_map, pred_score_map, gt_geo_map, pred_geo_map,
+                                           roi_mask)
+
+                extra_info = dict(**values_dict, score_map=pred_score_map, geo_map=pred_geo_map)
+
+                loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
+
+                loss_val = loss.item()
+                val_epoch_loss += loss_val
+
+                pbar.update(1)
+                val_dict = {
+                    'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
+                    'IoU loss': extra_info['iou_loss']
+                }
+                pbar.set_postfix(val_dict)
+
+        print('Train mean loss: {:.4f} | Val mean loss: {:.4f} | Elapsed time: {}'.format(
+            epoch_loss / num_batches, val_epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
 
         if (epoch + 1) % save_interval == 0:
             if not osp.exists(model_dir):
