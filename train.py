@@ -6,6 +6,7 @@ import numpy as np
 import random
 from datetime import timedelta
 from argparse import ArgumentParser
+import wandb
 
 import torch
 from torch import cuda
@@ -37,6 +38,7 @@ def parse_args():
     parser.add_argument('--max_epoch', type=int, default=200)
     parser.add_argument('--save_interval', type=int, default=5)
     parser.add_argument('--seed', type=int, default=2021)
+    parser.add_argument('--exp_name', type=str)
 
     args = parser.parse_args()
 
@@ -59,7 +61,12 @@ def set_seed(seed) :
 
 
 def do_training(data_dir, model_dir, device, image_size, input_size, num_workers, batch_size,
-                learning_rate, max_epoch, save_interval, seed):
+                learning_rate, max_epoch, save_interval, seed, exp_name):
+    if exp_name is None:
+        raise BaseException("You must set 'exp_name'.")
+    else:
+        NAME = exp_name
+
     set_seed(seed)
     dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size)
     dataset = EASTDataset(dataset)
@@ -77,11 +84,23 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1)
 
+    # Set wandb
+    config = {
+        'image_size':image_size, 'input_size':input_size, 'num_workers':num_workers, 'batch_size':batch_size,
+        'learning_rate':learning_rate, 'epochs':max_epoch, 'seed':seed
+    }
+    wandb.init(project='OCR', entity='friends', config=config, name = NAME)
+    wandb.define_metric("epoch")
+    wandb.define_metric("learning_rate", step_metric="epoch")
+    wandb.define_metric("val/*", step_metric="epoch")
+    wandb.define_metric("val/loss", summary="min")
+    wandb.watch(model)
+
     model.train()
     for epoch in range(max_epoch):
         epoch_loss, epoch_start = 0, time.time()
         with tqdm(total=num_batches) as pbar:
-            for img, gt_score_map, gt_geo_map, roi_mask in train_loader:
+            for step, (img, gt_score_map, gt_geo_map, roi_mask) in enumerate(train_loader):
                 pbar.set_description('[Epoch {}]'.format(epoch + 1))
 
                 loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
@@ -91,6 +110,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
                 loss_val = loss.item()
                 epoch_loss += loss_val
+                wandb.log({"train/loss": loss.item(), "epoch":epoch+1}, step=epoch*num_batches+step)
 
                 pbar.update(1)
                 val_dict = {
@@ -127,6 +147,8 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                     'IoU loss': extra_info['iou_loss']
                 }
                 pbar.set_postfix(val_dict)
+                
+        wandb.log({"val/loss": val_epoch_loss / val_num_batches, "epoch":epoch+1})
 
         print('Train mean loss: {:.4f} | Val mean loss: {:.4f} | Elapsed time: {}'.format(
             epoch_loss / num_batches, val_epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
