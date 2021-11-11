@@ -28,12 +28,12 @@ def parse_args():
                                                                         'trained_models'))
 
     parser.add_argument('--device', default='cuda' if cuda.is_available() else 'cpu')
-    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--num_workers', type=int, default=7)
 
     parser.add_argument('--image_size', type=int, default=1024)
     parser.add_argument('--input_size', type=int, default=512)
     parser.add_argument('--batch_size', type=int, default=12)
-    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--max_epoch', type=int, default=200)
     parser.add_argument('--save_interval', type=int, default=5)
     parser.add_argument('--seed', type=int, default=2021)
@@ -61,11 +61,16 @@ def set_seed(seed) :
 def do_training(data_dir, model_dir, device, image_size, input_size, num_workers, batch_size,
                 learning_rate, max_epoch, save_interval, seed):
     set_seed(seed)
-    dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size)
+    dataset = SceneTextDataset(data_dir, split='new_train', image_size=image_size, crop_size=input_size)
     dataset = EASTDataset(dataset)
 
-    L = len(dataset)
-    valid_dataset, train_dataset = torch.utils.data.random_split(dataset, (L//5,L-(L//5)))
+    #L = len(dataset)
+    #valid_dataset, train_dataset = torch.utils.data.random_split(dataset, (L//5,L-(L//5)))
+
+    train_dataset = dataset
+    valid_dataset = SceneTextDataset(data_dir, split='new_valid', image_size=image_size, crop_size=input_size)
+    valid_dataset = EASTDataset(valid_dataset)
+
     num_batches = math.ceil(len(train_dataset) / batch_size)
     val_num_batches = math.ceil(len(valid_dataset) / batch_size)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
