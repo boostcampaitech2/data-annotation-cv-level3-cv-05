@@ -2,6 +2,8 @@ import os
 import os.path as osp
 import time
 import math
+import numpy as np
+import random
 from datetime import timedelta
 from argparse import ArgumentParser
 
@@ -21,7 +23,7 @@ def parse_args():
 
     # Conventional args
     parser.add_argument('--data_dir', type=str,
-                        default=os.environ.get('SM_CHANNEL_TRAIN', '../input/data/ICDAR17_Korean'))
+                        default=os.environ.get('SM_CHANNEL_TRAIN', '/opt/ml/input/data/ICDAR17_Korean'))
     parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR',
                                                                         'trained_models'))
 
@@ -34,6 +36,7 @@ def parse_args():
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--max_epoch', type=int, default=200)
     parser.add_argument('--save_interval', type=int, default=5)
+    parser.add_argument('--seed', type=int, default=2021)
 
     args = parser.parse_args()
 
@@ -43,8 +46,21 @@ def parse_args():
     return args
 
 
+def set_seed(seed) :
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed) # if use multi-GPU
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    print(f"seed : {seed}")
+
+
 def do_training(data_dir, model_dir, device, image_size, input_size, num_workers, batch_size,
-                learning_rate, max_epoch, save_interval):
+                learning_rate, max_epoch, save_interval, seed):
+    set_seed(seed)
     dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size)
     dataset = EASTDataset(dataset)
     num_batches = math.ceil(len(dataset) / batch_size)
