@@ -29,7 +29,7 @@ def parse_args():
                                                                         'trained_models'))
 
     parser.add_argument('--device', default='cuda' if cuda.is_available() else 'cpu')
-    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--num_workers', type=int, default=7)
 
     parser.add_argument('--image_size', type=int, default=1024)
     parser.add_argument('--input_size', type=int, default=512)
@@ -76,7 +76,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     num_batches = math.ceil(len(train_dataset) / batch_size)
     val_num_batches = math.ceil(len(valid_dataset) / batch_size)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
@@ -110,7 +110,6 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
                 loss_val = loss.item()
                 epoch_loss += loss_val
-                wandb.log({"train/loss": loss.item(), "epoch":epoch+1}, step=epoch*num_batches+step)
 
                 pbar.update(1)
                 val_dict = {
@@ -119,9 +118,18 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 }
                 pbar.set_postfix(val_dict)
 
+                wandb.log({ "train/loss": loss.item(), 
+                            "train/cls_loss": extra_info['cls_loss'],
+                            "train/angle_loss": extra_info['angle_loss'],
+                            "train/iou_loss": extra_info['iou_loss'],
+                            "epoch":epoch+1}, step=epoch*num_batches+step)
+
         scheduler.step()
 
         val_epoch_loss = 0
+        val_cls_loss = 0
+        val_angle_loss = 0
+        val_iou_loss = 0
         with tqdm(total=val_num_batches) as pbar:
             model.eval()
             for img, gt_score_map, gt_geo_map, roi_mask in valid_loader:
@@ -147,8 +155,16 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                     'IoU loss': extra_info['iou_loss']
                 }
                 pbar.set_postfix(val_dict)
+
+                val_cls_loss += extra_info['cls_loss']
+                val_angle_loss += extra_info['angle_loss']
+                val_iou_loss += extra_info['iou_loss']
                 
-        wandb.log({"val/loss": val_epoch_loss / val_num_batches, "epoch":epoch+1})
+        wandb.log({ "val/loss": val_epoch_loss / val_num_batches,
+                    "val/cls_loss": val_cls_loss / val_num_batches,
+                    "val/angle_loss": val_angle_loss / val_num_batches,
+                    "val/iou_loss": val_iou_loss / val_num_batches,
+                    "epoch":epoch+1})
 
         print('Train mean loss: {:.4f} | Val mean loss: {:.4f} | Elapsed time: {}'.format(
             epoch_loss / num_batches, val_epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
