@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--max_epoch', type=int, default=200)
     parser.add_argument('--save_interval', type=int, default=5)
+    parser.add_argument('--wandb_interval', type=int, default=10)
     parser.add_argument('--seed', type=int, default=2021)
     parser.add_argument('--exp_name', type=str)
 
@@ -61,7 +62,7 @@ def set_seed(seed) :
 
 
 def do_training(data_dir, model_dir, device, image_size, input_size, num_workers, batch_size,
-                learning_rate, max_epoch, save_interval, seed, exp_name):
+                learning_rate, max_epoch, save_interval, wandb_interval, seed, exp_name):
     if exp_name is None:
         raise BaseException("You must set 'exp_name'.")
     else:
@@ -112,17 +113,18 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 epoch_loss += loss_val
 
                 pbar.update(1)
-                val_dict = {
+                train_dict = {
                     'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
                     'IoU loss': extra_info['iou_loss']
                 }
-                pbar.set_postfix(val_dict)
+                pbar.set_postfix(train_dict)
 
-                wandb.log({ "train/loss": loss.item(), 
-                            "train/cls_loss": val_dict['Cls loss'],
-                            "train/angle_loss": val_dict['Angle loss'],
-                            "train/iou_loss": val_dict['IoU loss'],
-                            "epoch":epoch+1}, step=epoch*num_batches+step)
+                if (step + 1) % wandb_interval == 0:
+                    wandb.log({ "train/loss": loss.item(), 
+                                "train/cls_loss": train_dict['Cls loss'],
+                                "train/angle_loss": train_dict['Angle loss'],
+                                "train/iou_loss": train_dict['IoU loss'],
+                                "epoch":epoch+1}, step=epoch*num_batches+step)
 
         scheduler.step()
 
