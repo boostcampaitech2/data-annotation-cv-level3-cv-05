@@ -119,9 +119,9 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 pbar.set_postfix(val_dict)
 
                 wandb.log({ "train/loss": loss.item(), 
-                            "train/cls_loss": extra_info['cls_loss'],
-                            "train/angle_loss": extra_info['angle_loss'],
-                            "train/iou_loss": extra_info['iou_loss'],
+                            "train/cls_loss": val_dict['Cls loss'],
+                            "train/angle_loss": val_dict['Angle loss'],
+                            "train/iou_loss": val_dict['IoU loss'],
                             "epoch":epoch+1}, step=epoch*num_batches+step)
 
         scheduler.step()
@@ -156,9 +156,9 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 }
                 pbar.set_postfix(val_dict)
 
-                val_cls_loss += extra_info['cls_loss']
-                val_angle_loss += extra_info['angle_loss']
-                val_iou_loss += extra_info['iou_loss']
+                val_cls_loss += val_dict['Cls loss']
+                val_angle_loss += val_dict['Angle loss']
+                val_iou_loss += val_dict['IoU loss']
                 
         wandb.log({ "val/loss": val_epoch_loss / val_num_batches,
                     "val/cls_loss": val_cls_loss / val_num_batches,
@@ -175,6 +175,8 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
             ckpt_fpath = osp.join(model_dir, 'latest.pth')
             torch.save(model.state_dict(), ckpt_fpath)
+        
+        print()
 
 
 def main(args):
