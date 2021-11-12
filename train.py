@@ -38,6 +38,7 @@ def parse_args():
     parser.add_argument('--max_epoch', type=int, default=200)
     parser.add_argument('--save_interval', type=int, default=5)
     parser.add_argument('--wandb_interval', type=int, default=10)
+    parser.add_argument('--wandb_skip', type=bool, default=False)
     parser.add_argument('--seed', type=int, default=2021)
     parser.add_argument('--exp_name', type=str)
 
@@ -62,7 +63,7 @@ def set_seed(seed) :
 
 
 def do_training(data_dir, model_dir, device, image_size, input_size, num_workers, batch_size,
-                learning_rate, max_epoch, save_interval, wandb_interval, seed, exp_name):
+                learning_rate, max_epoch, save_interval, wandb_interval, wandb_skip, seed, exp_name):
     if exp_name is None:
         raise BaseException("You must set 'exp_name'.")
     else:
@@ -86,16 +87,17 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1)
 
     # Set wandb
-    config = {
-        'image_size':image_size, 'input_size':input_size, 'num_workers':num_workers, 'batch_size':batch_size,
-        'learning_rate':learning_rate, 'epochs':max_epoch, 'seed':seed
-    }
-    wandb.init(project='OCR', entity='friends', config=config, name = NAME)
-    wandb.define_metric("epoch")
-    wandb.define_metric("learning_rate", step_metric="epoch")
-    wandb.define_metric("val/*", step_metric="epoch")
-    wandb.define_metric("val/loss", summary="min")
-    wandb.watch(model)
+    if wandb_skip is False:
+        config = {
+            'image_size':image_size, 'input_size':input_size, 'num_workers':num_workers, 'batch_size':batch_size,
+            'learning_rate':learning_rate, 'epochs':max_epoch, 'seed':seed
+        }
+        wandb.init(project='OCR', entity='friends', config=config, name = NAME)
+        wandb.define_metric("epoch")
+        wandb.define_metric("learning_rate", step_metric="epoch")
+        wandb.define_metric("val/*", step_metric="epoch")
+        wandb.define_metric("val/loss", summary="min")
+        wandb.watch(model)
 
     model.train()
     for epoch in range(max_epoch):
@@ -119,7 +121,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 }
                 pbar.set_postfix(train_dict)
 
-                if (step + 1) % wandb_interval == 0:
+                if wandb_skip is False and (step + 1) % wandb_interval == 0:
                     wandb.log({ "train/loss": loss.item(), 
                                 "train/cls_loss": train_dict['Cls loss'],
                                 "train/angle_loss": train_dict['Angle loss'],
@@ -161,12 +163,13 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 val_cls_loss += val_dict['Cls loss']
                 val_angle_loss += val_dict['Angle loss']
                 val_iou_loss += val_dict['IoU loss']
-                
-        wandb.log({ "val/loss": val_epoch_loss / val_num_batches,
-                    "val/cls_loss": val_cls_loss / val_num_batches,
-                    "val/angle_loss": val_angle_loss / val_num_batches,
-                    "val/iou_loss": val_iou_loss / val_num_batches,
-                    "epoch":epoch+1})
+        
+        if wandb_skip is False:            
+            wandb.log({ "val/loss": val_epoch_loss / val_num_batches,
+                        "val/cls_loss": val_cls_loss / val_num_batches,
+                        "val/angle_loss": val_angle_loss / val_num_batches,
+                        "val/iou_loss": val_iou_loss / val_num_batches,
+                        "epoch":epoch+1})
 
         print('Train mean loss: {:.4f} | Val mean loss: {:.4f} | Elapsed time: {}'.format(
             epoch_loss / num_batches, val_epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
