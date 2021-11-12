@@ -36,10 +36,14 @@ for name in file_list:
             x,y,w,h = ann["bbox"]
             if ann["bbox"][0] is None:
                 continue 
+                
             temp["words"][i] = {
                 "transcription":ann["text"],
                 "language": ["ko"],
                 "illegibility":False}
+
+            if ann["text"] == "xxx":
+                temp["words"][i]["illegibility"]=True
 
             if json_data["metadata"][0]["wordorientation"] == "가로":
                 temp["words"][i]["orientation"] = "Horizontal"
@@ -60,7 +64,7 @@ for name in file_list:
 
 
 #print(json.dumps(file_data,ensure_ascii=False,indent='\t'))
-file_path = 'ufo.json'
+file_path = 'new_ufo.json'
 
 with open(file_path,'w', encoding='UTF-8-sig') as f:
-    f.write(json.dumps(file_data,ensure_ascii=False))
+    f.write(json.dumps(file_data,ensure_ascii=False,indent='\t'))
