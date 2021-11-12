@@ -39,11 +39,13 @@ for name in file_list:
                 
             temp["words"][i] = {
                 "transcription":ann["text"],
-                "language": ["ko"],
-                "illegibility":False}
-
+                "language": ["ko"]}
+            
             if ann["text"] == "xxx":
                 temp["words"][i]["illegibility"]=True
+            else:
+                temp["words"][i]["illegibility"]=False
+           
 
             if json_data["metadata"][0]["wordorientation"] == "가로":
                 temp["words"][i]["orientation"] = "Horizontal"
