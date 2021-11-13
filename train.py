@@ -19,6 +19,9 @@ from dataset import SceneTextDataset
 from model import EAST
 
 from dataset import ValidSceneTextDataset, ValidEASTDataset, collate_fn
+import cv2
+from detect import detect
+from deteval import calc_deteval_metrics
 
 def parse_args():
     parser = ArgumentParser()
@@ -137,9 +140,12 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
         val_cls_loss = 0
         val_angle_loss = 0
         val_iou_loss = 0
+        pred_bboxes_dict = dict()
+        gt_bboxes_dict = dict()
+        transcriptions_dict = dict()
         with tqdm(total=val_num_batches) as pbar:
             model.eval()
-            for img, gt_score_map, gt_geo_map, roi_mask, transcriptions, image_fname in valid_loader:
+            for img, gt_score_map, gt_geo_map, roi_mask, transcriptions, word_bboxes, image_fnames in valid_loader:
                 pbar.set_description('[Valid {}]'.format(epoch + 1))
 
                 img, gt_score_map, gt_geo_map, roi_mask = (img.to(device), gt_score_map.to(device),
@@ -166,7 +172,21 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 val_cls_loss += val_dict['Cls loss']
                 val_angle_loss += val_dict['Angle loss']
                 val_iou_loss += val_dict['IoU loss']
-        
+
+                orig_imgs = []
+                input_size = 512
+                for image_fname in image_fnames:
+                    image_fpath = osp.join(data_dir, f'images/{image_fname}')
+                    orig_imgs.append(cv2.imread(image_fpath)[:, :, ::-1])
+                pred_bboxes = detect(model, orig_imgs, input_size)
+
+                for image_fname, pred_bbox, gt_bbox, transcription in zip(image_fnames, pred_bboxes, word_bboxes, transcriptions):
+                    pred_bboxes_dict[image_fname] = pred_bbox
+                    gt_bboxes_dict[image_fname] = gt_bbox
+                    transcriptions_dict[image_fname] = transcription
+
+            result_dict = calc_deteval_metrics(pred_bboxes_dict, gt_bboxes_dict, transcriptions_dict)
+            print(result_dict['total'])
         if wandb_skip is False:            
             wandb.log({ "val/loss": val_epoch_loss / val_num_batches,
                         "val/cls_loss": val_cls_loss / val_num_batches,
