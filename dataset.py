@@ -383,3 +383,47 @@ class SceneTextDataset(Dataset):
         roi_mask = generate_roi_mask(image, vertices, labels)
 
         return image, word_bboxes, roi_mask
+
+
+class ValidSceneTextDataset(SceneTextDataset):
+    def __init__(self, root_dir, split='train', image_size=1024, crop_size=512, color_jitter=True,
+                 normalize=True):
+        super().__init__(root_dir, split, image_size, crop_size, color_jitter, normalize)
+    
+    def __len__(self):
+        return super().__len__()
+    
+    def __getitem__(self, idx):
+        image_fname = self.image_fnames[idx]
+        transcriptions = []
+        for word_info in self.anno['images'][image_fname]['words'].values():
+            transcriptions.append(word_info['transcription'])
+
+        return super().__getitem__(idx), transcription, image_fname
+
+
+class ValidEASTDataset(Dataset):
+    def __init__(self, dataset, map_scale=0.25, to_tensor=True):
+        self.dataset = dataset
+        self.map_scale = map_scale
+        self.to_tensor = to_tensor
+
+    def __getitem__(self, idx):
+        image, word_bboxes, roi_mask, transcription, image_fname = self.dataset[idx]
+        score_map, geo_map = generate_score_geo_maps(image, word_bboxes, map_scale=self.map_scale)
+
+        mask_size = int(image.shape[0] * self.map_scale), int(image.shape[1] * self.map_scale)
+        roi_mask = cv2.resize(roi_mask, dsize=mask_size)
+        if roi_mask.ndim == 2:
+            roi_mask = np.expand_dims(roi_mask, axis=2)
+
+        if self.to_tensor:
+            image = torch.Tensor(image).permute(2, 0, 1)
+            score_map = torch.Tensor(score_map).permute(2, 0, 1)
+            geo_map = torch.Tensor(geo_map).permute(2, 0, 1)
+            roi_mask = torch.Tensor(roi_mask).permute(2, 0, 1)
+
+        return image, score_map, geo_map, roi_mask, transcription, image_fname
+
+    def __len__(self):
+        return len(self.dataset)
