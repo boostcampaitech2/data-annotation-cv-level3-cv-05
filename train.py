@@ -175,7 +175,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
                 if epoch > -1:
                     orig_imgs, orig_size = [], []
-                    input_size = 256
+                    input_size = 1024
                     for image_fname in image_fnames:
                         image_fpath = osp.join(data_dir, f'images/{image_fname}')
                         image_ = cv2.imread(image_fpath)[:, :, ::-1]
@@ -183,15 +183,11 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                         orig_size.append(max(image_.shape[:2]))
                     pred_bboxes = detect(model, orig_imgs, input_size)
 
-                    pred_bboxes *= np.array(orig_size) / input_size
-                    for p, g in zip(pred_bboxes, word_bboxes):
-                        print(p)#, g)
-                        print()
-
                     for image_fname, pred_bbox, gt_bbox, transcription in zip(image_fnames, pred_bboxes, word_bboxes, transcriptions):
                         pred_bboxes_dict[image_fname] = pred_bbox
                         gt_bboxes_dict[image_fname] = gt_bbox
                         transcriptions_dict[image_fname] = transcription
+
             if epoch > -1:
                 result_dict = calc_deteval_metrics(pred_bboxes_dict, gt_bboxes_dict, transcriptions_dict)
                 print(result_dict['total'])
