@@ -57,7 +57,6 @@ class CustomDataset(Dataset):
             shutil.copy(osp.join(self.root,'images',self.sample_names[idx]),osp.join(self.copy_images_to,self.sample_names[idx]))
 
         for k,v in sample_info['words'].items() :
-            v['illegibility'] = False
             if v['language'] is not None :
                 v['language'][0] = v['language'][0].lower()
             
@@ -72,7 +71,7 @@ def main():
     dst_image_dir = osp.join(DST_DATASET_DIR, 'images')
 
     # set json dir 
-    label_name = "user.json"
+    label_name = "new_mask.json"
     custom = CustomDataset(SRC_DATASET_DIR,label_name,copy_images_to=dst_image_dir)
 
     anno = dict(images=dict())
