@@ -395,13 +395,19 @@ class ValidSceneTextDataset(SceneTextDataset):
     
     def __getitem__(self, idx):
         image_fname = self.image_fnames[idx]
-        transcriptions = []
+        vertices, labels, transcriptions = [], [], []
         for word_info in self.anno['images'][image_fname]['words'].values():
+            vertices.append(np.array(word_info['points']).flatten())
+            labels.append(int(not word_info['illegibility']))
             transcriptions.append(word_info['transcription'])
+        vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
+
+        vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
+        vertices = np.reshape(vertices, (-1, 4, 2))
 
         image, word_bboxes, roi_mask = super().__getitem__(idx)
 
-        return image, word_bboxes, roi_mask, transcriptions, image_fname
+        return image, word_bboxes, roi_mask, transcriptions, vertices, image_fname
 
 
 from east_dataset import generate_score_geo_maps
@@ -413,7 +419,7 @@ class ValidEASTDataset(Dataset):
         self.to_tensor = to_tensor
 
     def __getitem__(self, idx):
-        image, word_bboxes, roi_mask, transcriptions, image_fname = self.dataset[idx]
+        image, word_bboxes, roi_mask, transcriptions, vertices, image_fname = self.dataset[idx]
         score_map, geo_map = generate_score_geo_maps(image, word_bboxes, map_scale=self.map_scale)
 
         mask_size = int(image.shape[0] * self.map_scale), int(image.shape[1] * self.map_scale)
@@ -427,7 +433,7 @@ class ValidEASTDataset(Dataset):
             geo_map = torch.Tensor(geo_map).permute(2, 0, 1)
             roi_mask = torch.Tensor(roi_mask).permute(2, 0, 1)
 
-        return image, score_map, geo_map, roi_mask, transcriptions, word_bboxes, image_fname
+        return image, score_map, geo_map, roi_mask, transcriptions, vertices, image_fname
 
     def __len__(self):
         return len(self.dataset)

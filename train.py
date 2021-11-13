@@ -90,7 +90,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     model = EAST()
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1)
+    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[100, 150], gamma=0.1)
 
     # Set wandb
     if wandb_skip is False:
@@ -173,20 +173,33 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 val_angle_loss += val_dict['Angle loss']
                 val_iou_loss += val_dict['IoU loss']
 
-                orig_imgs = []
-                input_size = 512
-                for image_fname in image_fnames:
-                    image_fpath = osp.join(data_dir, f'images/{image_fname}')
-                    orig_imgs.append(cv2.imread(image_fpath)[:, :, ::-1])
-                pred_bboxes = detect(model, orig_imgs, input_size)
+                if epoch > -1:
+                    orig_imgs, orig_size = [], []
+                    input_size = 256
+                    for image_fname in image_fnames:
+                        image_fpath = osp.join(data_dir, f'images/{image_fname}')
+                        image_ = cv2.imread(image_fpath)[:, :, ::-1]
+                        orig_imgs.append(image_)
+                        orig_size.append(max(image_.shape[:2]))
+                    pred_bboxes = detect(model, orig_imgs, input_size)
 
-                for image_fname, pred_bbox, gt_bbox, transcription in zip(image_fnames, pred_bboxes, word_bboxes, transcriptions):
-                    pred_bboxes_dict[image_fname] = pred_bbox
-                    gt_bboxes_dict[image_fname] = gt_bbox
-                    transcriptions_dict[image_fname] = transcription
+                    pred_bboxes *= np.array(orig_size) / input_size
+                    for p, g in zip(pred_bboxes, word_bboxes):
+                        print(p)#, g)
+                        print()
 
-            result_dict = calc_deteval_metrics(pred_bboxes_dict, gt_bboxes_dict, transcriptions_dict)
-            print(result_dict['total'])
+                    for image_fname, pred_bbox, gt_bbox, transcription in zip(image_fnames, pred_bboxes, word_bboxes, transcriptions):
+                        pred_bboxes_dict[image_fname] = pred_bbox
+                        gt_bboxes_dict[image_fname] = gt_bbox
+                        transcriptions_dict[image_fname] = transcription
+            if epoch > -1:
+                result_dict = calc_deteval_metrics(pred_bboxes_dict, gt_bboxes_dict, transcriptions_dict)
+                print(result_dict['total'])
+                if wandb_skip is False:
+                    wandb.log({ "val/precision": result_dict['total']['precision'],
+                            "val/recall": result_dict['total']['recall'],
+                            "val/hmean": result_dict['total']['hmean'],
+                            "epoch":epoch+1})
         if wandb_skip is False:            
             wandb.log({ "val/loss": val_epoch_loss / val_num_batches,
                         "val/cls_loss": val_cls_loss / val_num_batches,
