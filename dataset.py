@@ -427,7 +427,7 @@ class ValidEASTDataset(Dataset):
             geo_map = torch.Tensor(geo_map).permute(2, 0, 1)
             roi_mask = torch.Tensor(roi_mask).permute(2, 0, 1)
 
-        return image, score_map, geo_map, roi_mask, transcriptions, image_fname
+        return image, score_map, geo_map, roi_mask, transcriptions, word_bboxes, image_fname
 
     def __len__(self):
         return len(self.dataset)
@@ -439,6 +439,7 @@ def collate_fn(batchs):
     geo_maps = []
     roi_masks = []
     transcriptions = []
+    word_bboxes = []
     image_fnames = []
     
     for data in batchs:
@@ -447,11 +448,12 @@ def collate_fn(batchs):
         geo_maps.append(data[2])
         roi_masks.append(data[3])
         transcriptions.append(data[4])
-        image_fnames.append(data[5])
+        word_bboxes.append(data[5])
+        image_fnames.append(data[6])
     
     imgs = torch.stack(imgs, dim=0)
     score_maps = torch.stack(score_maps, dim=0)
     geo_maps = torch.stack(geo_maps, dim=0)
     roi_masks = torch.stack(roi_masks, dim=0)
 
-    return imgs, score_maps, geo_maps, roi_masks, transcriptions, image_fnames
+    return imgs, score_maps, geo_maps, roi_masks, transcriptions, word_bboxes, image_fnames
