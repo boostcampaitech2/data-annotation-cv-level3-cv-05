@@ -18,6 +18,7 @@ from east_dataset import EASTDataset
 from dataset import SceneTextDataset
 from model import EAST
 
+from dataset import ValidSceneTextDataset, ValidEASTDataset, collate_fn
 
 def parse_args():
     parser = ArgumentParser()
@@ -70,15 +71,17 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
         NAME = exp_name
 
     set_seed(seed)
-    dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size)
+    dataset = SceneTextDataset(data_dir, split='new_train', image_size=image_size, crop_size=input_size)
     dataset = EASTDataset(dataset)
 
-    L = len(dataset)
-    valid_dataset, train_dataset = torch.utils.data.random_split(dataset, (L//5,L-(L//5)))
+    train_dataset = dataset
+    valid_dataset = ValidSceneTextDataset(data_dir, split='new_valid', image_size=image_size, crop_size=input_size)
+    valid_dataset = ValidEASTDataset(valid_dataset)
+
     num_batches = math.ceil(len(train_dataset) / batch_size)
     val_num_batches = math.ceil(len(valid_dataset) / batch_size)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=collate_fn)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
@@ -136,7 +139,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
         val_iou_loss = 0
         with tqdm(total=val_num_batches) as pbar:
             model.eval()
-            for img, gt_score_map, gt_geo_map, roi_mask in valid_loader:
+            for img, gt_score_map, gt_geo_map, roi_mask, transcriptions, image_fname in valid_loader:
                 pbar.set_description('[Valid {}]'.format(epoch + 1))
 
                 img, gt_score_map, gt_geo_map, roi_mask = (img.to(device), gt_score_map.to(device),
