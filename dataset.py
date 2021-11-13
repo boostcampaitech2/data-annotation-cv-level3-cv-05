@@ -7,6 +7,8 @@ import torch
 import numpy as np
 import cv2
 import albumentations as A
+from albumentations.pytorch import ToTensorV2
+from albumentations.augmentations.geometric.resize import LongestMaxSize
 from torch.utils.data import Dataset
 from shapely.geometry import Polygon
 
@@ -346,23 +348,44 @@ class SceneTextDataset(Dataset):
         self.image_size, self.crop_size = image_size, crop_size
         self.color_jitter, self.normalize = color_jitter, normalize
 
+        self.images = []
+        self.vertices = []
+        self.labels = []
+        for image_fname in self.image_fnames:
+            image_fpath = osp.join(self.image_dir, image_fname)
+            image = Image.open(image_fpath)
+
+            vertices, labels = [], []
+            for word_info in self.anno['images'][image_fname]['words'].values():
+                vertices.append(np.array(word_info['points']).flatten())
+                labels.append(int(not word_info['illegibility']))
+            vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
+
+            vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
+            image, vertices = resize_img(image, vertices, self.image_size)
+
+            self.images.append(image)
+            self.vertices.append(vertices)
+            self.labels.append(labels)
+
     def __len__(self):
         return len(self.image_fnames)
 
     def __getitem__(self, idx):
-        image_fname = self.image_fnames[idx]
-        image_fpath = osp.join(self.image_dir, image_fname)
+        # image_fname = self.image_fnames[idx]
 
-        vertices, labels = [], []
-        for word_info in self.anno['images'][image_fname]['words'].values():
-            vertices.append(np.array(word_info['points']).flatten())
-            labels.append(int(not word_info['illegibility']))
-        vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
+        # vertices, labels = [], []
+        # for word_info in self.anno['images'][image_fname]['words'].values():
+        #     vertices.append(np.array(word_info['points']).flatten())
+        #     labels.append(int(not word_info['illegibility']))
+        # vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
 
-        vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
+        # vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
 
-        image = Image.open(image_fpath)
-        image, vertices = resize_img(image, vertices, self.image_size)
+        image = self.images[idx]
+        vertices = self.vertices[idx]
+        labels = self.labels[idx]
+        # image, vertices = resize_img(image, vertices, self.image_size)
         image, vertices = adjust_height(image, vertices)
         image, vertices = rotate_img(image, vertices)
         image, vertices = crop_img(image, vertices, labels, self.crop_size)
@@ -383,3 +406,73 @@ class SceneTextDataset(Dataset):
         roi_mask = generate_roi_mask(image, vertices, labels)
 
         return image, word_bboxes, roi_mask
+
+
+class ValidSceneTextDataset(Dataset):
+    def __init__(self, root_dir, split='valid', image_size=1024, crop_size=None, color_jitter=False,
+                 normalize=True):
+        with open(osp.join(root_dir, 'ufo/{}.json'.format(split)), 'r') as f:
+            anno = json.load(f)
+
+        self.anno = anno
+        self.image_fnames = sorted(anno['images'].keys())
+        self.image_dir = osp.join(root_dir, 'images')
+
+        self.image_size, self.crop_size = image_size, crop_size
+        self.color_jitter, self.normalize = color_jitter, normalize
+
+        prep_fn = A.Compose([
+            LongestMaxSize(image_size), A.PadIfNeeded(min_height=image_size, min_width=image_size,
+                                                    position=A.PadIfNeeded.PositionType.TOP_LEFT),
+            A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)), ToTensorV2()])
+
+        self.images = []
+        self.vertices = []
+        self.orig_sizes = []
+        self.labels = []
+        self.transcriptions = []
+        for image_fname in self.image_fnames:
+            image_fpath = osp.join(self.image_dir, image_fname)
+            image = cv2.imread(image_fpath)[:, :, ::-1]
+            self.orig_sizes.append(image.shape[:2])
+
+            vertices, labels, transcriptions = [], [], []
+            for word_info in self.anno['images'][image_fname]['words'].values():
+                vertices.append(np.array(word_info['points']).flatten())
+                labels.append(int(not word_info['illegibility']))
+                transcriptions.append(word_info['transcription'])
+            vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
+
+            vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
+
+            self.images.append(prep_fn(image=image)['image'])
+            self.vertices.append(vertices.reshape(-1,4,2))
+            self.labels.append(labels)
+            self.transcriptions.append(transcriptions)
+
+    def __len__(self):
+        return len(self.image_fnames)
+
+    def __getitem__(self, idx):
+        image = self.images[idx]
+        vertices = self.vertices[idx]
+        orig_size = self.orig_sizes[idx]
+        labels = self.labels[idx]
+        transcriptions = self.transcriptions[idx]
+        return image, vertices, orig_size, labels, transcriptions, self.image_fnames[idx]
+
+    def collate_fn(batchs):
+        imgs = []
+        vertices = []
+        orig_sizes = []
+        labels = []
+        transcriptions = []
+        fnames = []
+        for data in batchs:
+            imgs.append(data[0])
+            vertices.append(data[1])
+            orig_sizes.append(data[2])
+            labels.append(data[3])
+            transcriptions.append(data[4])
+            fnames.append(data[5])
+        return torch.stack(imgs, dim=0), vertices, orig_sizes, labels, transcriptions, fnames
