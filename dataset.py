@@ -399,8 +399,12 @@ class ValidSceneTextDataset(SceneTextDataset):
         for word_info in self.anno['images'][image_fname]['words'].values():
             transcriptions.append(word_info['transcription'])
 
-        return super().__getitem__(idx), transcription, image_fname
+        image, word_bboxes, roi_mask = super().__getitem__(idx)
 
+        return image, word_bboxes, roi_mask, transcriptions, image_fname
+
+
+from east_dataset import generate_score_geo_maps
 
 class ValidEASTDataset(Dataset):
     def __init__(self, dataset, map_scale=0.25, to_tensor=True):
@@ -409,7 +413,7 @@ class ValidEASTDataset(Dataset):
         self.to_tensor = to_tensor
 
     def __getitem__(self, idx):
-        image, word_bboxes, roi_mask, transcription, image_fname = self.dataset[idx]
+        image, word_bboxes, roi_mask, transcriptions, image_fname = self.dataset[idx]
         score_map, geo_map = generate_score_geo_maps(image, word_bboxes, map_scale=self.map_scale)
 
         mask_size = int(image.shape[0] * self.map_scale), int(image.shape[1] * self.map_scale)
@@ -423,7 +427,31 @@ class ValidEASTDataset(Dataset):
             geo_map = torch.Tensor(geo_map).permute(2, 0, 1)
             roi_mask = torch.Tensor(roi_mask).permute(2, 0, 1)
 
-        return image, score_map, geo_map, roi_mask, transcription, image_fname
+        return image, score_map, geo_map, roi_mask, transcriptions, image_fname
 
     def __len__(self):
         return len(self.dataset)
+
+
+def collate_fn(batchs):
+    imgs = []
+    score_maps = []
+    geo_maps = []
+    roi_masks = []
+    transcriptions = []
+    image_fnames = []
+    
+    for data in batchs:
+        imgs.append(data[0])
+        score_maps.append(data[1])
+        geo_maps.append(data[2])
+        roi_masks.append(data[3])
+        transcriptions.append(data[4])
+        image_fnames.append(data[5])
+    
+    imgs = torch.stack(imgs, dim=0)
+    score_maps = torch.stack(score_maps, dim=0)
+    geo_maps = torch.stack(geo_maps, dim=0)
+    roi_masks = torch.stack(roi_masks, dim=0)
+
+    return imgs, score_maps, geo_maps, roi_masks, transcriptions, image_fnames
