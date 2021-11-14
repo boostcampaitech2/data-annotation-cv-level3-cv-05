@@ -284,7 +284,7 @@ def adjust_height(img, vertices, ratio=0.2):
     ratio_h = 1 + ratio * (np.random.rand() * 2 - 1)
     old_h, old_w = img.shape[:2]
     new_h = int(np.around(old_h * ratio_h))
-    img = cv2.resize(img,(old_w, new_h),interpolation=cv2.INTER_AREA)
+    img = cv2.resize(img,(old_w, old_h),interpolation=cv2.INTER_AREA)
 
     new_vertices = vertices.copy()
     if vertices.size > 0:
@@ -402,7 +402,7 @@ class SceneTextDataset(Dataset):
 
 class ValidSceneTextDataset(Dataset):
     def __init__(self, root_dir, split='valid', image_size=1024, crop_size=None, color_jitter=False,
-                 normalize=True):
+                 normalize=True, map_scale=0.25):
         with open(osp.join(root_dir, 'ufo/{}.json'.format(split)), 'r') as f:
             anno = json.load(f)
 
@@ -412,6 +412,7 @@ class ValidSceneTextDataset(Dataset):
 
         self.image_size, self.crop_size = image_size, crop_size
         self.color_jitter, self.normalize = color_jitter, normalize
+        self.map_scale = map_scale
 
         prep_fn = A.Compose([
             LongestMaxSize(image_size), A.PadIfNeeded(min_height=image_size, min_width=image_size,

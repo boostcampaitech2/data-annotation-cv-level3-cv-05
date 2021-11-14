@@ -20,6 +20,10 @@ from model import EAST
 from detect import get_bboxes
 from deteval import calc_deteval_metrics
 
+from dataset import ValidSceneTextDataset
+import cv2
+from detect import detect
+from deteval import calc_deteval_metrics
 
 def parse_args():
     parser = ArgumentParser()
@@ -73,8 +77,9 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     set_seed(seed)
     train_dataset = SceneTextDataset(data_dir, split='new_train', image_size=image_size, crop_size=input_size)
     train_dataset = EASTDataset(train_dataset)
+    print(f"Load train data {len(train_dataset)}")
     valid_dataset = ValidSceneTextDataset(data_dir, split='new_valid', image_size=image_size)
-    # valid_dataset = EASTDataset(valid_dataset)
+    print(f"Load valid data {len(valid_dataset)}")
 
     num_batches = math.ceil(len(train_dataset) / batch_size)
     val_num_batches = math.ceil(len(valid_dataset) / batch_size)
@@ -85,7 +90,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     model = EAST()
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1)
+    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[100, 150], gamma=0.1)
 
     # Set wandb
     config = {
@@ -127,6 +132,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                                 "train/cls_loss": train_dict['Cls loss'],
                                 "train/angle_loss": train_dict['Angle loss'],
                                 "train/iou_loss": train_dict['IoU loss'],
+                                "learning_rate": optimizer.param_groups[0]['lr'],
                                 "epoch":epoch+1}, step=epoch*num_batches+step)
 
         scheduler.step()
@@ -172,16 +178,6 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                     "epoch":epoch+1})
         print('Train mean loss: {:.4f} | Elapsed time: {}'.format(
             epoch_loss / num_batches, timedelta(seconds=time.time() - epoch_start)))
-        # print('Train mean loss: {:.4f} | Val mean loss: {:.4f} | Elapsed time: {}'.format(
-        #     epoch_loss / num_batches, val_epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
-
-        # if (epoch + 1) % save_interval == 0:
-        #     if not osp.exists(model_dir):
-        #         os.makedirs(model_dir)
-
-        #     ckpt_fpath = osp.join(model_dir, 'latest.pth')
-        #     torch.save(model.state_dict(), ckpt_fpath)
-        
         if metric < resDict['total']['hmean']:
             metric = resDict['total']['hmean']
             if not osp.exists('best_models'):
