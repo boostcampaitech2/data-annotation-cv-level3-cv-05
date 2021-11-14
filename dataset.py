@@ -286,6 +286,7 @@ def adjust_height(img, vertices, ratio=0.2):
     new_h = int(np.around(old_h * ratio_h))
     img = cv2.resize(img,(old_w, new_h),interpolation=cv2.INTER_AREA)
 
+
     new_vertices = vertices.copy()
     if vertices.size > 0:
         new_vertices[:,[1,3,5,7]] = vertices[:,[1,3,5,7]] * (new_h / old_h)
