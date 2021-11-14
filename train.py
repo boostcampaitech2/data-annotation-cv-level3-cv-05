@@ -132,10 +132,12 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                                 "train/cls_loss": train_dict['Cls loss'],
                                 "train/angle_loss": train_dict['Angle loss'],
                                 "train/iou_loss": train_dict['IoU loss'],
+                                "learning_rate": optimizer.param_groups[0]['lr'],
                                 "epoch":epoch+1}, step=epoch*num_batches+step)
 
         scheduler.step()
 
+        
         val_epoch_loss = 0
         val_cls_loss = 0
         val_angle_loss = 0
@@ -143,17 +145,18 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
         pred_bboxes_dict = dict()
         gt_bboxes_dict = dict()
         transcriptions_dict = dict()
+        
         with tqdm(total=val_num_batches) as pbar:
             model.eval()
             for img, gt_score_map, gt_geo_map, roi_mask, transcriptions, word_bboxes, image_fnames in valid_loader:
                 pbar.set_description('[Valid {}]'.format(epoch + 1))
 
                 img, gt_score_map, gt_geo_map, roi_mask = (img.to(device), gt_score_map.to(device),
-                                               gt_geo_map.to(device), roi_mask.to(device))
+                                            gt_geo_map.to(device), roi_mask.to(device))
                 pred_score_map, pred_geo_map = model(img)
 
                 loss, values_dict = model.criterion(gt_score_map, pred_score_map, gt_geo_map, pred_geo_map,
-                                           roi_mask)
+                                        roi_mask)
 
                 extra_info = dict(**values_dict, score_map=pred_score_map, geo_map=pred_geo_map)
 
@@ -173,34 +176,30 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 val_angle_loss += val_dict['Angle loss']
                 val_iou_loss += val_dict['IoU loss']
 
-                if epoch > -1:
-                    orig_imgs, orig_size = [], []
-                    input_size = 1024
-                    for image_fname in image_fnames:
-                        image_fpath = osp.join(data_dir, f'images/{image_fname}')
-                        image_ = cv2.imread(image_fpath)[:, :, ::-1]
-                        orig_imgs.append(image_)
-                        orig_size.append(max(image_.shape[:2]))
-                    pred_bboxes = detect(model, orig_imgs, input_size)
+                orig_imgs, orig_size = [], []
+                input_size = 512
+                for image_fname in image_fnames:
+                    image_fpath = osp.join(data_dir, f'images/{image_fname}')
+                    image_ = cv2.imread(image_fpath)[:, :, ::-1]
+                    orig_imgs.append(image_)
+                    orig_size.append(max(image_.shape[:2]))
+                pred_bboxes = detect(model, orig_imgs, input_size)
 
-                    for image_fname, pred_bbox, gt_bbox, transcription in zip(image_fnames, pred_bboxes, word_bboxes, transcriptions):
-                        pred_bboxes_dict[image_fname] = pred_bbox
-                        gt_bboxes_dict[image_fname] = gt_bbox
-                        transcriptions_dict[image_fname] = transcription
+                for image_fname, pred_bbox, gt_bbox, transcription in zip(image_fnames, pred_bboxes, word_bboxes, transcriptions):
+                    pred_bboxes_dict[image_fname] = pred_bbox
+                    gt_bboxes_dict[image_fname] = gt_bbox
+                    transcriptions_dict[image_fname] = transcription
 
-            if epoch > -1:
-                result_dict = calc_deteval_metrics(pred_bboxes_dict, gt_bboxes_dict, transcriptions_dict)
-                print(result_dict['total'])
-                if wandb_skip is False:
-                    wandb.log({ "val/precision": result_dict['total']['precision'],
-                            "val/recall": result_dict['total']['recall'],
-                            "val/hmean": result_dict['total']['hmean'],
-                            "epoch":epoch+1})
+        result_dict = calc_deteval_metrics(pred_bboxes_dict, gt_bboxes_dict, transcriptions_dict)
+        print(result_dict['total'])
         if wandb_skip is False:            
             wandb.log({ "val/loss": val_epoch_loss / val_num_batches,
                         "val/cls_loss": val_cls_loss / val_num_batches,
                         "val/angle_loss": val_angle_loss / val_num_batches,
                         "val/iou_loss": val_iou_loss / val_num_batches,
+                        "val/precision": result_dict['total']['precision'],
+                        "val/recall": result_dict['total']['recall'],
+                        "val/f1_score": result_dict['total']['hmean'],
                         "epoch":epoch+1})
 
         print('Train mean loss: {:.4f} | Val mean loss: {:.4f} | Elapsed time: {}'.format(
