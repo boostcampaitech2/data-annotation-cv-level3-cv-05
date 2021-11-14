@@ -198,17 +198,12 @@ def crop_img(img, vertices, labels, length):
         region      : cropped image region
         new_vertices: new vertices in cropped region
     '''
-    # h, w = img.height, img.width
     h, w = img.shape[:2]
     # confirm the shortest side of image >= length
     if h >= w and w < length:
-        # img = img.resize((length, int(h * length / w)), Image.BILINEAR)
         img = cv2.resize(img,(length, int(h * length / w)),interpolation=cv2.INTER_AREA)
     elif h < w and h < length:
-        # img = img.resize((int(w * length / h), length), Image.BILINEAR)
         img = cv2.resize(img,(int(w * length / h), length),interpolation=cv2.INTER_AREA)
-    # ratio_w = img.width / w
-    # ratio_h = img.height / h
     ratio_w = img.shape[1] / w
     ratio_h = img.shape[0] / h
     assert(ratio_w >= 1 and ratio_h >= 1)
@@ -219,8 +214,6 @@ def crop_img(img, vertices, labels, length):
         new_vertices[:,[1,3,5,7]] = vertices[:,[1,3,5,7]] * ratio_h
 
     # find random position
-    # remain_h = img.height - length
-    # remain_w = img.width - length
     remain_h = img.shape[0] - length
     remain_w = img.shape[1] - length
     flag = True
@@ -231,7 +224,6 @@ def crop_img(img, vertices, labels, length):
         start_h = int(np.random.rand() * remain_h)
         flag = is_cross_text([start_w, start_h], length, new_vertices[labels==1,:])
     box = (start_w, start_h, start_w + length, start_h + length)
-    # region = img.crop(box)
     region = img[box[1]:box[3],box[0]:box[2],:]
     if new_vertices.size == 0:
         return region, new_vertices
@@ -290,11 +282,9 @@ def adjust_height(img, vertices, ratio=0.2):
         new_vertices: adjusted vertices
     '''
     ratio_h = 1 + ratio * (np.random.rand() * 2 - 1)
-    # old_h = img.height
     old_h, old_w = img.shape[:2]
     new_h = int(np.around(old_h * ratio_h))
-    # img = img.resize((img.width, new_h), Image.BILINEAR)
-    img = cv2.resize(img,(old_w, old_h),interpolation=cv2.INTER_AREA)
+    img = cv2.resize(img,(old_w, new_h),interpolation=cv2.INTER_AREA)
 
     new_vertices = vertices.copy()
     if vertices.size > 0:
@@ -313,8 +303,6 @@ def rotate_img(img, vertices, angle_range=10):
         new_vertices: rotated vertices
     '''
     h,w = img.shape[:2]
-    # center_x = (img.width - 1) / 2
-    # center_y = (img.height - 1) / 2
     center_x = (w - 1) / 2
     center_y = (h - 1) / 2
     angle = angle_range * (np.random.rand() * 2 - 1)
@@ -370,7 +358,8 @@ class SceneTextDataset(Dataset):
         self.labels = []
         for image_fname in self.image_fnames:
             image_fpath = osp.join(self.image_dir, image_fname)
-            image = Image.open(image_fpath)
+            image = cv2.imread(image_fpath)
+            image = cv2.cvtColor(image,cv2.COLOR_BGR2RGB)
 
             vertices, labels = [], []
             for word_info in self.anno['images'][image_fname]['words'].values():
@@ -389,21 +378,10 @@ class SceneTextDataset(Dataset):
         return len(self.image_fnames)
 
     def __getitem__(self, idx):
-        # image_fname = self.image_fnames[idx]
+        image = self.images[idx]
+        vertices = self.vertices[idx]
+        labels = self.labels[idx]
 
-        vertices, labels = [], []
-        for word_info in self.anno['images'][image_fname]['words'].values():
-            vertices.append(np.array(word_info['points']).flatten())
-            labels.append(int(not word_info['illegibility']))
-            
-        vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
-
-        # vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
-
-        image = cv2.imread(image_fpath)
-        image = cv2.cvtColor(image,cv2.COLOR_BGR2RGB)
-        
-        image, vertices = resize_img(image, vertices, self.image_size)
         image, vertices = adjust_height(image, vertices)
         image, vertices = rotate_img(image, vertices)
         image, vertices = crop_img(image, vertices, labels, self.crop_size)
