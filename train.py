@@ -18,6 +18,10 @@ from east_dataset import EASTDataset
 from dataset import SceneTextDataset
 from model import EAST
 
+from dataset import ValidSceneTextDataset, ValidEASTDataset, collate_fn
+import cv2
+from detect import detect
+from deteval import calc_deteval_metrics
 
 def parse_args():
     parser = ArgumentParser()
@@ -70,21 +74,23 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
         NAME = exp_name
 
     set_seed(seed)
-    dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size)
+    dataset = SceneTextDataset(data_dir, split='new_train', image_size=image_size, crop_size=input_size)
     dataset = EASTDataset(dataset)
 
-    L = len(dataset)
-    valid_dataset, train_dataset = torch.utils.data.random_split(dataset, (L//5,L-(L//5)))
+    train_dataset = dataset
+    valid_dataset = ValidSceneTextDataset(data_dir, split='new_valid', image_size=image_size, crop_size=input_size)
+    valid_dataset = ValidEASTDataset(valid_dataset)
+
     num_batches = math.ceil(len(train_dataset) / batch_size)
     val_num_batches = math.ceil(len(valid_dataset) / batch_size)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=collate_fn)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1)
+    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[100, 150], gamma=0.1)
 
     # Set wandb
     if wandb_skip is False:
@@ -126,25 +132,31 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                                 "train/cls_loss": train_dict['Cls loss'],
                                 "train/angle_loss": train_dict['Angle loss'],
                                 "train/iou_loss": train_dict['IoU loss'],
+                                "learning_rate": optimizer.param_groups[0]['lr'],
                                 "epoch":epoch+1}, step=epoch*num_batches+step)
 
         scheduler.step()
 
+        
         val_epoch_loss = 0
         val_cls_loss = 0
         val_angle_loss = 0
         val_iou_loss = 0
+        pred_bboxes_dict = dict()
+        gt_bboxes_dict = dict()
+        transcriptions_dict = dict()
+        
         with tqdm(total=val_num_batches) as pbar:
             model.eval()
-            for img, gt_score_map, gt_geo_map, roi_mask in valid_loader:
+            for img, gt_score_map, gt_geo_map, roi_mask, transcriptions, word_bboxes, image_fnames in valid_loader:
                 pbar.set_description('[Valid {}]'.format(epoch + 1))
 
                 img, gt_score_map, gt_geo_map, roi_mask = (img.to(device), gt_score_map.to(device),
-                                               gt_geo_map.to(device), roi_mask.to(device))
+                                            gt_geo_map.to(device), roi_mask.to(device))
                 pred_score_map, pred_geo_map = model(img)
 
                 loss, values_dict = model.criterion(gt_score_map, pred_score_map, gt_geo_map, pred_geo_map,
-                                           roi_mask)
+                                        roi_mask)
 
                 extra_info = dict(**values_dict, score_map=pred_score_map, geo_map=pred_geo_map)
 
@@ -163,12 +175,31 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 val_cls_loss += val_dict['Cls loss']
                 val_angle_loss += val_dict['Angle loss']
                 val_iou_loss += val_dict['IoU loss']
-        
+
+                orig_imgs, orig_size = [], []
+                input_size = 512
+                for image_fname in image_fnames:
+                    image_fpath = osp.join(data_dir, f'images/{image_fname}')
+                    image_ = cv2.imread(image_fpath)[:, :, ::-1]
+                    orig_imgs.append(image_)
+                    orig_size.append(max(image_.shape[:2]))
+                pred_bboxes = detect(model, orig_imgs, input_size)
+
+                for image_fname, pred_bbox, gt_bbox, transcription in zip(image_fnames, pred_bboxes, word_bboxes, transcriptions):
+                    pred_bboxes_dict[image_fname] = pred_bbox
+                    gt_bboxes_dict[image_fname] = gt_bbox
+                    transcriptions_dict[image_fname] = transcription
+
+        result_dict = calc_deteval_metrics(pred_bboxes_dict, gt_bboxes_dict, transcriptions_dict)
+        print(result_dict['total'])
         if wandb_skip is False:            
             wandb.log({ "val/loss": val_epoch_loss / val_num_batches,
                         "val/cls_loss": val_cls_loss / val_num_batches,
                         "val/angle_loss": val_angle_loss / val_num_batches,
                         "val/iou_loss": val_iou_loss / val_num_batches,
+                        "val/precision": result_dict['total']['precision'],
+                        "val/recall": result_dict['total']['recall'],
+                        "val/f1_score": result_dict['total']['hmean'],
                         "epoch":epoch+1})
 
         print('Train mean loss: {:.4f} | Val mean loss: {:.4f} | Elapsed time: {}'.format(
