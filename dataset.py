@@ -7,6 +7,8 @@ import torch
 import numpy as np
 import cv2
 import albumentations as A
+from albumentations.pytorch import ToTensorV2
+from albumentations.augmentations.geometric.resize import LongestMaxSize
 from torch.utils.data import Dataset
 from shapely.geometry import Polygon
 
@@ -196,17 +198,12 @@ def crop_img(img, vertices, labels, length):
         region      : cropped image region
         new_vertices: new vertices in cropped region
     '''
-    # h, w = img.height, img.width
     h, w = img.shape[:2]
     # confirm the shortest side of image >= length
     if h >= w and w < length:
-        # img = img.resize((length, int(h * length / w)), Image.BILINEAR)
         img = cv2.resize(img,(length, int(h * length / w)),interpolation=cv2.INTER_AREA)
     elif h < w and h < length:
-        # img = img.resize((int(w * length / h), length), Image.BILINEAR)
         img = cv2.resize(img,(int(w * length / h), length),interpolation=cv2.INTER_AREA)
-    # ratio_w = img.width / w
-    # ratio_h = img.height / h
     ratio_w = img.shape[1] / w
     ratio_h = img.shape[0] / h
     assert(ratio_w >= 1 and ratio_h >= 1)
@@ -217,8 +214,6 @@ def crop_img(img, vertices, labels, length):
         new_vertices[:,[1,3,5,7]] = vertices[:,[1,3,5,7]] * ratio_h
 
     # find random position
-    # remain_h = img.height - length
-    # remain_w = img.width - length
     remain_h = img.shape[0] - length
     remain_w = img.shape[1] - length
     flag = True
@@ -229,7 +224,6 @@ def crop_img(img, vertices, labels, length):
         start_h = int(np.random.rand() * remain_h)
         flag = is_cross_text([start_w, start_h], length, new_vertices[labels==1,:])
     box = (start_w, start_h, start_w + length, start_h + length)
-    # region = img.crop(box)
     region = img[box[1]:box[3],box[0]:box[2],:]
     if new_vertices.size == 0:
         return region, new_vertices
@@ -288,10 +282,8 @@ def adjust_height(img, vertices, ratio=0.2):
         new_vertices: adjusted vertices
     '''
     ratio_h = 1 + ratio * (np.random.rand() * 2 - 1)
-    # old_h = img.height
     old_h, old_w = img.shape[:2]
     new_h = int(np.around(old_h * ratio_h))
-    # img = img.resize((img.width, new_h), Image.BILINEAR)
     img = cv2.resize(img,(old_w, old_h),interpolation=cv2.INTER_AREA)
 
     new_vertices = vertices.copy()
@@ -311,8 +303,6 @@ def rotate_img(img, vertices, angle_range=10):
         new_vertices: rotated vertices
     '''
     h,w = img.shape[:2]
-    # center_x = (img.width - 1) / 2
-    # center_y = (img.height - 1) / 2
     center_x = (w - 1) / 2
     center_y = (h - 1) / 2
     angle = angle_range * (np.random.rand() * 2 - 1)
@@ -363,26 +353,35 @@ class SceneTextDataset(Dataset):
         self.image_size, self.crop_size = image_size, crop_size
         self.color_jitter, self.normalize = color_jitter, normalize
 
+        self.images = []
+        self.vertices = []
+        self.labels = []
+        for image_fname in self.image_fnames:
+            image_fpath = osp.join(self.image_dir, image_fname)
+            image = cv2.imread(image_fpath)
+            image = cv2.cvtColor(image,cv2.COLOR_BGR2RGB)
+
+            vertices, labels = [], []
+            for word_info in self.anno['images'][image_fname]['words'].values():
+                vertices.append(np.array(word_info['points']).flatten())
+                labels.append(int(not word_info['illegibility']))
+            vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
+
+            vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
+            image, vertices = resize_img(image, vertices, self.image_size)
+
+            self.images.append(image)
+            self.vertices.append(vertices)
+            self.labels.append(labels)
+
     def __len__(self):
         return len(self.image_fnames)
 
     def __getitem__(self, idx):
-        image_fname = self.image_fnames[idx]
-        image_fpath = osp.join(self.image_dir, image_fname)
+        image = self.images[idx]
+        vertices = self.vertices[idx]
+        labels = self.labels[idx]
 
-        vertices, labels = [], []
-        for word_info in self.anno['images'][image_fname]['words'].values():
-            vertices.append(np.array(word_info['points']).flatten())
-            labels.append(int(not word_info['illegibility']))
-            
-        vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
-
-        vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
-
-        image = cv2.imread(image_fpath)
-        image = cv2.cvtColor(image,cv2.COLOR_BGR2RGB)
-        
-        image, vertices = resize_img(image, vertices, self.image_size)
         image, vertices = adjust_height(image, vertices)
         image, vertices = rotate_img(image, vertices)
         image, vertices = crop_img(image, vertices, labels, self.crop_size)
@@ -401,81 +400,72 @@ class SceneTextDataset(Dataset):
         return image, word_bboxes, roi_mask
 
 
-class ValidSceneTextDataset(SceneTextDataset):
-    def __init__(self, root_dir, split='train', image_size=1024, crop_size=512, color_jitter=True,
-                 normalize=True):
-        super().__init__(root_dir, split, image_size, crop_size, color_jitter, normalize)
-    
-    def __len__(self):
-        return super().__len__()
-    
-    def __getitem__(self, idx):
-        image_fname = self.image_fnames[idx]
-        vertices, labels, transcriptions = [], [], []
-        for word_info in self.anno['images'][image_fname]['words'].values():
-            vertices.append(np.array(word_info['points']).flatten())
-            labels.append(int(not word_info['illegibility']))
-            transcriptions.append(word_info['transcription'])
-        vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
+class ValidSceneTextDataset(Dataset):
+    def __init__(self, root_dir, split='valid', image_size=1024, crop_size=None, color_jitter=False,
+                 normalize=True, map_scale=0.25):
+        with open(osp.join(root_dir, 'ufo/{}.json'.format(split)), 'r') as f:
+            anno = json.load(f)
 
-        vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
-        vertices = np.reshape(vertices, (-1, 4, 2))
+        self.anno = anno
+        self.image_fnames = sorted(anno['images'].keys())
+        self.image_dir = osp.join(root_dir, 'images')
 
-        image, word_bboxes, roi_mask = super().__getitem__(idx)
-
-        return image, word_bboxes, roi_mask, transcriptions, vertices, image_fname
-
-
-from east_dataset import generate_score_geo_maps
-
-class ValidEASTDataset(Dataset):
-    def __init__(self, dataset, map_scale=0.25, to_tensor=True):
-        self.dataset = dataset
+        self.image_size, self.crop_size = image_size, crop_size
+        self.color_jitter, self.normalize = color_jitter, normalize
         self.map_scale = map_scale
-        self.to_tensor = to_tensor
 
-    def __getitem__(self, idx):
-        image, word_bboxes, roi_mask, transcriptions, vertices, image_fname = self.dataset[idx]
-        score_map, geo_map = generate_score_geo_maps(image, word_bboxes, map_scale=self.map_scale)
+        prep_fn = A.Compose([
+            LongestMaxSize(image_size), A.PadIfNeeded(min_height=image_size, min_width=image_size,
+                                                    position=A.PadIfNeeded.PositionType.TOP_LEFT),
+            A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)), ToTensorV2()])
 
-        mask_size = int(image.shape[0] * self.map_scale), int(image.shape[1] * self.map_scale)
-        roi_mask = cv2.resize(roi_mask, dsize=mask_size)
-        if roi_mask.ndim == 2:
-            roi_mask = np.expand_dims(roi_mask, axis=2)
+        self.images = []
+        self.vertices = []
+        self.orig_sizes = []
+        self.labels = []
+        self.transcriptions = []
+        for image_fname in self.image_fnames:
+            image_fpath = osp.join(self.image_dir, image_fname)
+            image = cv2.imread(image_fpath)[:, :, ::-1]
+            self.orig_sizes.append(image.shape[:2])
 
-        if self.to_tensor:
-            image = torch.Tensor(image).permute(2, 0, 1)
-            score_map = torch.Tensor(score_map).permute(2, 0, 1)
-            geo_map = torch.Tensor(geo_map).permute(2, 0, 1)
-            roi_mask = torch.Tensor(roi_mask).permute(2, 0, 1)
+            vertices, labels, transcriptions = [], [], []
+            for word_info in self.anno['images'][image_fname]['words'].values():
+                vertices.append(np.array(word_info['points']).flatten())
+                labels.append(int(not word_info['illegibility']))
+                transcriptions.append(word_info['transcription'])
+            vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
 
-        return image, score_map, geo_map, roi_mask, transcriptions, vertices, image_fname
+            vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
+
+            self.images.append(prep_fn(image=image)['image'])
+            self.vertices.append(vertices.reshape(-1,4,2))
+            self.labels.append(labels)
+            self.transcriptions.append(transcriptions)
 
     def __len__(self):
-        return len(self.dataset)
+        return len(self.image_fnames)
 
+    def __getitem__(self, idx):
+        image = self.images[idx]
+        vertices = self.vertices[idx]
+        orig_size = self.orig_sizes[idx]
+        labels = self.labels[idx]
+        transcriptions = self.transcriptions[idx]
+        return image, vertices, orig_size, labels, transcriptions, self.image_fnames[idx]
 
-def collate_fn(batchs):
-    imgs = []
-    score_maps = []
-    geo_maps = []
-    roi_masks = []
-    transcriptions = []
-    word_bboxes = []
-    image_fnames = []
-    
-    for data in batchs:
-        imgs.append(data[0])
-        score_maps.append(data[1])
-        geo_maps.append(data[2])
-        roi_masks.append(data[3])
-        transcriptions.append(data[4])
-        word_bboxes.append(data[5])
-        image_fnames.append(data[6])
-    
-    imgs = torch.stack(imgs, dim=0)
-    score_maps = torch.stack(score_maps, dim=0)
-    geo_maps = torch.stack(geo_maps, dim=0)
-    roi_masks = torch.stack(roi_masks, dim=0)
-
-    return imgs, score_maps, geo_maps, roi_masks, transcriptions, word_bboxes, image_fnames
+    def collate_fn(batchs):
+        imgs = []
+        vertices = []
+        orig_sizes = []
+        labels = []
+        transcriptions = []
+        fnames = []
+        for data in batchs:
+            imgs.append(data[0])
+            vertices.append(data[1])
+            orig_sizes.append(data[2])
+            labels.append(data[3])
+            transcriptions.append(data[4])
+            fnames.append(data[5])
+        return torch.stack(imgs, dim=0), vertices, orig_sizes, labels, transcriptions, fnames
