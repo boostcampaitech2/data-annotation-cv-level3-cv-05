@@ -99,6 +99,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     wandb.define_metric("val/loss", summary="min")
     wandb.watch(model)
 
+    metric = 0
     for epoch in range(max_epoch):
         model.train()
         epoch_loss, epoch_start = 0, time.time()
@@ -130,6 +131,8 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
         scheduler.step()
 
+        if epoch < 100:
+            continue
         pred_bboxes_dict = dict()
         gt_bboxes_dict = dict()
         transcriptions_dict = dict()
@@ -172,13 +175,20 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
         # print('Train mean loss: {:.4f} | Val mean loss: {:.4f} | Elapsed time: {}'.format(
         #     epoch_loss / num_batches, val_epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
 
-        if (epoch + 1) % save_interval == 0:
-            if not osp.exists(model_dir):
-                os.makedirs(model_dir)
+        # if (epoch + 1) % save_interval == 0:
+        #     if not osp.exists(model_dir):
+        #         os.makedirs(model_dir)
 
-            ckpt_fpath = osp.join(model_dir, 'latest.pth')
-            torch.save(model.state_dict(), ckpt_fpath)
+        #     ckpt_fpath = osp.join(model_dir, 'latest.pth')
+        #     torch.save(model.state_dict(), ckpt_fpath)
         
+        if metric < resDict['total']['hmean']:
+            metric = resDict['total']['hmean']
+            if not osp.exists('best_models'):
+                os.makedirs('best_models')
+            ckpt_fpath = osp.join('best_models', 'latest.pth')
+            torch.save(model.state_dict(), ckpt_fpath)
+
         print()
 
 
