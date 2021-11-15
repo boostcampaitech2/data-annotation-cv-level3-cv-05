@@ -449,23 +449,28 @@ class ValidSceneTextDataset(SceneTextDataset):
         transcriptions = self.transcriptions[idx]
 
         image, word_bboxes, roi_mask = super().__getitem__(idx)
+        image = image.permute(1, 2, 0)
         score_map, geo_map = generate_score_geo_maps(image, word_bboxes, map_scale=self.map_scale)
 
-        mask_size = int(image.shape[1] * self.map_scale), int(image.shape[2] * self.map_scale)
+        mask_size = int(image.shape[0] * self.map_scale), int(image.shape[1] * self.map_scale)
         
         roi_mask = cv2.resize(roi_mask, dsize=mask_size)
         if roi_mask.ndim == 2:
             roi_mask = np.expand_dims(roi_mask, axis=2)
 
         if self.to_tensor:
+            image = torch.Tensor(image).permute(2, 0, 1)
             score_map = torch.Tensor(score_map).permute(2, 0, 1)
             geo_map = torch.Tensor(geo_map).permute(2, 0, 1)
             roi_mask = torch.Tensor(roi_mask).permute(2, 0, 1)
 
-        return image, vertices, orig_size, labels, transcriptions, self.image_fnames[idx]
+        return image, score_map, geo_map, roi_mask, vertices, orig_size, labels, transcriptions, self.image_fnames[idx]
 
     def collate_fn(batchs):
         imgs = []
+        score_maps = []
+        geo_maps = []
+        roi_masks = []
         vertices = []
         orig_sizes = []
         labels = []
@@ -473,9 +478,18 @@ class ValidSceneTextDataset(SceneTextDataset):
         fnames = []
         for data in batchs:
             imgs.append(data[0])
-            vertices.append(data[1])
-            orig_sizes.append(data[2])
-            labels.append(data[3])
-            transcriptions.append(data[4])
-            fnames.append(data[5])
-        return torch.stack(imgs, dim=0), vertices, orig_sizes, labels, transcriptions, fnames
+            score_maps.append(data[1])
+            geo_maps.append(data[2])
+            roi_masks.append(data[3])
+            vertices.append(data[4])
+            orig_sizes.append(data[5])
+            labels.append(data[6])
+            transcriptions.append(data[7])
+            fnames.append(data[8])
+        
+        imgs = torch.stack(imgs, dim=0)
+        score_maps = torch.stack(score_maps, dim=0)
+        geo_maps = torch.stack(geo_maps, dim=0)
+        roi_masks = torch.stack(roi_masks, dim=0)
+
+        return imgs, score_maps, geo_maps, roi_masks, vertices, orig_sizes, labels, transcriptions, fnames
