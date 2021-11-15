@@ -76,9 +76,11 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
     set_seed(seed)
     train_dataset = SceneTextDataset(data_dir, split='new_train', image_size=image_size, crop_size=input_size)
+    train_dataset.load_image()
     train_dataset = EASTDataset(train_dataset)
     print(f"Load train data {len(train_dataset)}")
     valid_dataset = ValidSceneTextDataset(data_dir, split='new_valid', image_size=image_size)
+    valid_dataset.load_image()
     print(f"Load valid data {len(valid_dataset)}")
 
     num_batches = math.ceil(len(train_dataset) / batch_size)

@@ -357,6 +357,8 @@ class SceneTextDataset(Dataset):
         self.images = []
         self.vertices = []
         self.labels = []
+
+    def load_image(self):
         for image_fname in self.image_fnames:
             image_fpath = osp.join(self.image_dir, image_fname)
             image = cv2.imread(image_fpath)
@@ -385,7 +387,8 @@ class SceneTextDataset(Dataset):
 
         image, vertices = adjust_height(image, vertices)
         image, vertices = rotate_img(image, vertices)
-        image, vertices = crop_img(image, vertices, labels, self.crop_size)
+        if self.crop_size is not None:
+            image, vertices = crop_img(image, vertices, labels, self.crop_size)
 
         funcs = []
         if self.color_jitter:
@@ -401,30 +404,19 @@ class SceneTextDataset(Dataset):
         return image, word_bboxes, roi_mask
 
 
-class ValidSceneTextDataset(Dataset):
+class ValidSceneTextDataset(SceneTextDataset):
     def __init__(self, root_dir, split='valid', image_size=1024, crop_size=None, color_jitter=False,
-                 normalize=True, map_scale=0.25):
-        with open(osp.join(root_dir, 'ufo/{}.json'.format(split)), 'r') as f:
-            anno = json.load(f)
+                 normalize=True):
+        super().__init__(root_dir, split, image_size, crop_size, color_jitter, normalize)
 
-        self.anno = anno
-        self.image_fnames = sorted(anno['images'].keys())
-        self.image_dir = osp.join(root_dir, 'images')
-
-        self.image_size, self.crop_size = image_size, crop_size
-        self.color_jitter, self.normalize = color_jitter, normalize
-        self.map_scale = map_scale
-
-        prep_fn = A.Compose([
+        self.orig_sizes = []
+        self.transcriptions = []
+        self.prep_fn = A.Compose([
             LongestMaxSize(image_size), A.PadIfNeeded(min_height=image_size, min_width=image_size,
                                                     position=A.PadIfNeeded.PositionType.TOP_LEFT),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)), ToTensorV2()])
-
-        self.images = []
-        self.vertices = []
-        self.orig_sizes = []
-        self.labels = []
-        self.transcriptions = []
+    
+    def load_image(self):
         for image_fname in self.image_fnames:
             image_fpath = osp.join(self.image_dir, image_fname)
             image = cv2.imread(image_fpath)[:, :, ::-1]
@@ -439,7 +431,7 @@ class ValidSceneTextDataset(Dataset):
 
             vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
 
-            self.images.append(prep_fn(image=image)['image'])
+            self.images.append(self.prep_fn(image=image)['image'])
             self.vertices.append(vertices.reshape(-1,4,2))
             self.labels.append(labels)
             self.transcriptions.append(transcriptions)
