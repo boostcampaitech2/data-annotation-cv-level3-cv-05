@@ -425,7 +425,8 @@ class ValidSceneTextDataset(SceneTextDataset):
     def load_image(self):
         for image_fname in self.image_fnames:
             image_fpath = osp.join(self.image_dir, image_fname)
-            image = cv2.imread(image_fpath)[:, :, ::-1]
+            image = cv2.imread(image_fpath)
+            image = cv2.cvtColor(image,cv2.COLOR_BGR2RGB)
             self.orig_sizes.append(image.shape[:2])
 
             vertices, labels, transcriptions = [], [], []
@@ -436,6 +437,7 @@ class ValidSceneTextDataset(SceneTextDataset):
             vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
 
             vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
+            image, vertices = resize_img(image, vertices, self.image_size)
 
             self.images.append(self.prep_fn(image=image)['image'])
             self.vertices.append(vertices.reshape(-1,4,2))
@@ -443,14 +445,15 @@ class ValidSceneTextDataset(SceneTextDataset):
             self.transcriptions.append(transcriptions)
 
     def __getitem__(self, idx):
+        image = self.images[idx]
         vertices = self.vertices[idx]
-        orig_size = self.orig_sizes[idx]
         labels = self.labels[idx]
+        orig_size = self.orig_sizes[idx]
         transcriptions = self.transcriptions[idx]
 
-        image, word_bboxes, roi_mask = super().__getitem__(idx)
         image = image.permute(1, 2, 0)
-        score_map, geo_map = generate_score_geo_maps(image, word_bboxes, map_scale=self.map_scale)
+        roi_mask = generate_roi_mask(image, vertices, labels)
+        score_map, geo_map = generate_score_geo_maps(image, vertices, map_scale=self.map_scale)
 
         mask_size = int(image.shape[0] * self.map_scale), int(image.shape[1] * self.map_scale)
         

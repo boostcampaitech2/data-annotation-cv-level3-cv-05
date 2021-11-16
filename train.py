@@ -37,7 +37,7 @@ def parse_args():
     parser.add_argument('--device', default='cuda' if cuda.is_available() else 'cpu')
     parser.add_argument('--num_workers', type=int, default=7)
 
-    parser.add_argument('--image_size', type=int, default=1024)
+    parser.add_argument('--image_size', type=int, default=512)
     parser.add_argument('--input_size', type=int, default=512)
     parser.add_argument('--batch_size', type=int, default=12)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
@@ -153,7 +153,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 model.eval()
                 for step, (img, gt_score_map, gt_geo_map, roi_mask, vertices, orig_sizes, labels, transcriptions, fnames) in enumerate(valid_loader):
                     pbar.set_description('[Valid {}]'.format(epoch + 1))
-                    
+
                     loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
                     
                     score_maps, geo_maps = extra_info['score_map'], extra_info['geo_map']
@@ -172,7 +172,6 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                             bboxes = np.zeros((0, 4, 2), dtype=np.float32)
                         else:
                             bboxes = bboxes[:, :8].reshape(-1, 4, 2)
-                            bboxes *= max(orig_size) / image_size
                         
                         pred_bboxes_dict[fname] = bboxes
                         gt_bboxes_dict[fname] = vertice
