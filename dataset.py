@@ -11,7 +11,7 @@ from albumentations.pytorch import ToTensorV2
 from albumentations.augmentations.geometric.resize import LongestMaxSize
 from torch.utils.data import Dataset
 from shapely.geometry import Polygon
-
+from east_dataset import generate_score_geo_maps
 
 def cal_distance(x1, y1, x2, y2):
     '''calculate the Euclidean distance'''
@@ -343,7 +343,7 @@ def filter_vertices(vertices, labels, ignore_under=0, drop_under=0):
 
 class SceneTextDataset(Dataset):
     def __init__(self, root_dir, split='train', image_size=1024, crop_size=512, color_jitter=True,
-                 normalize=True):
+                 normalize=True, augmentation=True):
         with open(osp.join(root_dir, 'ufo/{}.json'.format(split)), 'r') as f:
             anno = json.load(f)
 
@@ -351,6 +351,7 @@ class SceneTextDataset(Dataset):
         self.image_fnames = sorted(anno['images'].keys())
         self.image_dir = osp.join(root_dir, 'images')
 
+        self.augmentation = augmentation
         self.image_size, self.crop_size = image_size, crop_size
         self.color_jitter, self.normalize = color_jitter, normalize
 
@@ -385,8 +386,9 @@ class SceneTextDataset(Dataset):
         vertices = self.vertices[idx]
         labels = self.labels[idx]
 
-        image, vertices = adjust_height(image, vertices)
-        image, vertices = rotate_img(image, vertices)
+        if self.augmentation is not None:
+            image, vertices = adjust_height(image, vertices)
+            image, vertices = rotate_img(image, vertices)
         if self.crop_size is not None:
             image, vertices = crop_img(image, vertices, labels, self.crop_size)
 
@@ -395,9 +397,11 @@ class SceneTextDataset(Dataset):
             funcs.append(A.ColorJitter(0.5, 0.5, 0.5, 0.25))
         if self.normalize:
             funcs.append(A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
-        transform = A.Compose(funcs)
+        
+        if len(funcs) > 0:
+            transform = A.Compose(funcs)
+            image = transform(image=image)['image']
 
-        image = transform(image=image)['image']
         word_bboxes = np.reshape(vertices, (-1, 4, 2))
         roi_mask = generate_roi_mask(image, vertices, labels)
 
@@ -406,11 +410,13 @@ class SceneTextDataset(Dataset):
 
 class ValidSceneTextDataset(SceneTextDataset):
     def __init__(self, root_dir, split='valid', image_size=1024, crop_size=None, color_jitter=False,
-                 normalize=True):
-        super().__init__(root_dir, split, image_size, crop_size, color_jitter, normalize)
+                 normalize=True, map_scale=0.25, to_tensor=True):
+        super().__init__(root_dir, split, image_size, crop_size, color_jitter, False, None)
 
         self.orig_sizes = []
         self.transcriptions = []
+        self.map_scale = map_scale
+        self.to_tensor = to_tensor
         self.prep_fn = A.Compose([
             LongestMaxSize(image_size), A.PadIfNeeded(min_height=image_size, min_width=image_size,
                                                     position=A.PadIfNeeded.PositionType.TOP_LEFT),
@@ -419,7 +425,8 @@ class ValidSceneTextDataset(SceneTextDataset):
     def load_image(self):
         for image_fname in self.image_fnames:
             image_fpath = osp.join(self.image_dir, image_fname)
-            image = cv2.imread(image_fpath)[:, :, ::-1]
+            image = cv2.imread(image_fpath)
+            image = cv2.cvtColor(image,cv2.COLOR_BGR2RGB)
             self.orig_sizes.append(image.shape[:2])
 
             vertices, labels, transcriptions = [], [], []
@@ -430,25 +437,43 @@ class ValidSceneTextDataset(SceneTextDataset):
             vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
 
             vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
+            image, vertices = resize_img(image, vertices, self.image_size)
 
             self.images.append(self.prep_fn(image=image)['image'])
             self.vertices.append(vertices.reshape(-1,4,2))
             self.labels.append(labels)
             self.transcriptions.append(transcriptions)
 
-    def __len__(self):
-        return len(self.image_fnames)
-
     def __getitem__(self, idx):
         image = self.images[idx]
         vertices = self.vertices[idx]
-        orig_size = self.orig_sizes[idx]
         labels = self.labels[idx]
+        orig_size = self.orig_sizes[idx]
         transcriptions = self.transcriptions[idx]
-        return image, vertices, orig_size, labels, transcriptions, self.image_fnames[idx]
+
+        image = image.permute(1, 2, 0)
+        roi_mask = generate_roi_mask(image, vertices, labels)
+        score_map, geo_map = generate_score_geo_maps(image, vertices, map_scale=self.map_scale)
+
+        mask_size = int(image.shape[0] * self.map_scale), int(image.shape[1] * self.map_scale)
+        
+        roi_mask = cv2.resize(roi_mask, dsize=mask_size)
+        if roi_mask.ndim == 2:
+            roi_mask = np.expand_dims(roi_mask, axis=2)
+
+        if self.to_tensor:
+            image = torch.Tensor(image).permute(2, 0, 1)
+            score_map = torch.Tensor(score_map).permute(2, 0, 1)
+            geo_map = torch.Tensor(geo_map).permute(2, 0, 1)
+            roi_mask = torch.Tensor(roi_mask).permute(2, 0, 1)
+
+        return image, score_map, geo_map, roi_mask, vertices, orig_size, labels, transcriptions, self.image_fnames[idx]
 
     def collate_fn(batchs):
         imgs = []
+        score_maps = []
+        geo_maps = []
+        roi_masks = []
         vertices = []
         orig_sizes = []
         labels = []
@@ -456,9 +481,18 @@ class ValidSceneTextDataset(SceneTextDataset):
         fnames = []
         for data in batchs:
             imgs.append(data[0])
-            vertices.append(data[1])
-            orig_sizes.append(data[2])
-            labels.append(data[3])
-            transcriptions.append(data[4])
-            fnames.append(data[5])
-        return torch.stack(imgs, dim=0), vertices, orig_sizes, labels, transcriptions, fnames
+            score_maps.append(data[1])
+            geo_maps.append(data[2])
+            roi_masks.append(data[3])
+            vertices.append(data[4])
+            orig_sizes.append(data[5])
+            labels.append(data[6])
+            transcriptions.append(data[7])
+            fnames.append(data[8])
+        
+        imgs = torch.stack(imgs, dim=0)
+        score_maps = torch.stack(score_maps, dim=0)
+        geo_maps = torch.stack(geo_maps, dim=0)
+        roi_masks = torch.stack(roi_masks, dim=0)
+
+        return imgs, score_maps, geo_maps, roi_masks, vertices, orig_sizes, labels, transcriptions, fnames

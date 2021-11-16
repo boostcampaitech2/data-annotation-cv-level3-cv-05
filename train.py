@@ -37,7 +37,7 @@ def parse_args():
     parser.add_argument('--device', default='cuda' if cuda.is_available() else 'cpu')
     parser.add_argument('--num_workers', type=int, default=7)
 
-    parser.add_argument('--image_size', type=int, default=1024)
+    parser.add_argument('--image_size', type=int, default=512)
     parser.add_argument('--input_size', type=int, default=512)
     parser.add_argument('--batch_size', type=int, default=12)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
@@ -136,23 +136,27 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                                 "train/iou_loss": train_dict['IoU loss'],
                                 "learning_rate": optimizer.param_groups[0]['lr'],
                                 "epoch":epoch+1}, step=epoch*num_batches+step)
-        print('[Train {}]: mean loss: {:.4f} | Elapsed time: {}'.format(
-            epoch + 1, epoch_loss / num_batches, timedelta(seconds=time.time() - epoch_start)))
+        
         scheduler.step()
 
-        if epoch < 100:
+        if epoch < 30:
             continue
+        val_epoch_loss = 0
+        val_cls_loss = 0
+        val_angle_loss = 0
+        val_iou_loss = 0            
         pred_bboxes_dict = dict()
         gt_bboxes_dict = dict()
         transcriptions_dict = dict()
         with tqdm(total=val_num_batches) as pbar:
             with torch.no_grad():
                 model.eval()
-                for step, (img, vertices, orig_sizes, labels, transcriptions, fnames) in enumerate(valid_loader):
+                for step, (img, gt_score_map, gt_geo_map, roi_mask, vertices, orig_sizes, labels, transcriptions, fnames) in enumerate(valid_loader):
                     pbar.set_description('[Valid {}]'.format(epoch + 1))
 
-                    img = img.to(device)
-                    score_maps, geo_maps = model(img)
+                    loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
+                    
+                    score_maps, geo_maps = extra_info['score_map'], extra_info['geo_map']
                     score_maps, geo_maps = score_maps.cpu().numpy(), geo_maps.cpu().numpy()
                     
                     by_sample_bboxes = []
@@ -168,19 +172,42 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                             bboxes = np.zeros((0, 4, 2), dtype=np.float32)
                         else:
                             bboxes = bboxes[:, :8].reshape(-1, 4, 2)
-                            bboxes *= max(orig_size) / image_size
                         
                         pred_bboxes_dict[fname] = bboxes
                         gt_bboxes_dict[fname] = vertice
                         transcriptions_dict[fname] = transcription
-                    pbar.update(1)  
+                    
+                    loss_val = loss.item()
+                    if loss_val is not None:
+                        val_epoch_loss += loss_val
+
+                    pbar.update(1)
+                    val_dict = {
+                        'Cls loss': extra_info['cls_loss'],
+                        'Angle loss': extra_info['angle_loss'],
+                        'IoU loss': extra_info['iou_loss']
+                    }
+                    pbar.set_postfix(val_dict)
+
+                    if val_dict['Cls loss'] is not None:
+                        val_cls_loss += val_dict['Cls loss']
+                        val_angle_loss += val_dict['Angle loss']
+                        val_iou_loss += val_dict['IoU loss']
+
         resDict = calc_deteval_metrics(pred_bboxes_dict, gt_bboxes_dict, transcriptions_dict)   
-        wandb.log({ "val/recall": resDict['total']['recall'],
+        wandb.log({ "val/loss": val_epoch_loss / val_num_batches,
+                    "val/cls_loss": val_cls_loss / val_num_batches,
+                    "val/angle_loss": val_angle_loss / val_num_batches,
+                    "val/iou_loss": val_iou_loss / val_num_batches,
+                    "val/recall": resDict['total']['recall'],
                     "val/precision": resDict['total']['precision'],
                     "val/f1_score": resDict['total']['hmean'],
                     "epoch":epoch+1})
-        print('[Valid {}]: f1_score : {:.4f} | precision : {:.4f} | recall : {:.4f} |'.format(
-            epoch + 1, resDict['total']['hmean'], resDict['total']['precision'], resDict['total']['recall']))
+        print('Train mean loss: {:.4f} | Val mean loss: {:.4f} | Elapsed time: {}'.format(
+            epoch_loss / num_batches, val_epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
+        print('[Valid {}]: f1_score : {:.4f} | precision : {:.4f} | recall : {:.4f}'.format(
+            epoch+1, resDict['total']['hmean'], resDict['total']['precision'], resDict['total']['recall']))
+
         if metric < resDict['total']['hmean']:
             metric = resDict['total']['hmean']
             if not osp.exists('best_models'):
