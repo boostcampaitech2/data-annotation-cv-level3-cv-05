@@ -136,7 +136,8 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                                 "train/iou_loss": train_dict['IoU loss'],
                                 "learning_rate": optimizer.param_groups[0]['lr'],
                                 "epoch":epoch+1}, step=epoch*num_batches+step)
-
+        print('[Train {}]: mean loss: {:.4f} | Elapsed time: {}'.format(
+            epoch + 1, epoch_loss / num_batches, timedelta(seconds=time.time() - epoch_start)))
         scheduler.step()
 
         if epoch < 0:
@@ -203,9 +204,10 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                     "val/precision": resDict['total']['precision'],
                     "val/f1_score": resDict['total']['hmean'],
                     "epoch":epoch+1})
-        print(resDict['total'])
-        print('Train mean loss: {:.4f} | Val mean loss: {:.4f} | Elapsed time: {}'.format(
-            epoch_loss / num_batches, val_epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
+                    
+        print('[Valid {}]: f1_score : {:.4f} | precision : {:.4f} | recall : {:.4f} |'.format(
+            epoch + 1, resDict['total']['hmean'], resDict['total']['precision'], resDict['total']['recall']))
+
         if metric < resDict['total']['hmean']:
             metric = resDict['total']['hmean']
             if not osp.exists('best_models'):
