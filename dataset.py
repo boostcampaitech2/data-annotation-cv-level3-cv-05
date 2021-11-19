@@ -8,10 +8,13 @@ import numpy as np
 import cv2
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-from albumentations.augmentations.geometric.resize import LongestMaxSize
+from albumentations.augmentations.geometric.resize import LongestMaxSize, SmallestMaxSize
 from torch.utils.data import Dataset
 from shapely.geometry import Polygon
 
+from transform import ComposedTransformation, CropMethod_1
+from tqdm import tqdm
+import random
 
 def cal_distance(x1, y1, x2, y2):
     '''calculate the Euclidean distance'''
@@ -257,17 +260,26 @@ def rotate_all_pixels(rotate_mat, anchor_x, anchor_y, length):
     return rotated_x, rotated_y
 
 
-def resize_img(img, vertices, size):
-    # h, w = img.height, img.width
-    h,w = img.shape[:2]
-    ratio = size / max(h, w)
-    if w > h:
-        # img = img.resize((size, int(h * ratio)), Image.BILINEAR)
-        img = cv2.resize(img,(size, int(h * ratio)),interpolation=cv2.INTER_AREA)
+def resize_img(img, vertices, size, keep_aspect_ratio=True):
+    if keep_aspect_ratio:
+        h,w = img.shape[:2]
+        ratio = size / max(h, w)
+        if w > h:
+            # img = img.resize((size, int(h * ratio)), Image.BILINEAR)
+            img = cv2.resize(img,(size, int(h * ratio)),interpolation=cv2.INTER_AREA)
+        else:
+            # img = img.resize((int(w * ratio), size), Image.BILINEAR)
+            img = cv2.resize(img,(int(w * ratio), size),interpolation=cv2.INTER_AREA)
+        new_vertices = vertices * ratio
     else:
-        # img = img.resize((int(w * ratio), size), Image.BILINEAR)
-        img = cv2.resize(img,(int(w * ratio), size),interpolation=cv2.INTER_AREA)
-    new_vertices = vertices * ratio
+        h,w = img.shape[:2]
+        ratio_w = size / w
+        ratio_h = size / h
+        img = cv2.resize(img, (size, size),interpolation=cv2.INTER_AREA)
+
+        new_vertices = np.zeros(vertices.shape)
+        new_vertices[:,[0,2,4,6]] = vertices[:,[0,2,4,6]] * ratio_w
+        new_vertices[:,[1,3,5,7]] = vertices[:,[1,3,5,7]] * ratio_h
     return img, new_vertices
 
 
@@ -332,12 +344,24 @@ def filter_vertices(vertices, labels, ignore_under=0, drop_under=0):
     new_vertices, new_labels = vertices.copy(), labels.copy()
 
     areas = np.array([Polygon(v.reshape((4, 2))).convex_hull.area for v in vertices])
-    labels[areas < ignore_under] = 0
+    new_labels[areas < ignore_under] = 0
 
     if drop_under > 0:
         passed = areas >= drop_under
         new_vertices, new_labels = new_vertices[passed], new_labels[passed]
 
+    return new_vertices, new_labels
+
+def filter_crop_vertices(size, vertices, labels, margin=1/30):
+    new_vertices, new_labels = vertices.copy(), labels.copy()
+    for i in range(len(new_labels)):
+        width = max(new_vertices[i][0::2]) - min(new_vertices[i][0::2])
+        height = max(new_vertices[i][1::2]) - min(new_vertices[i][1::2])
+
+        if (new_vertices[i][0::2] < -(margin*width)).any() or (new_vertices[i][0::2] > size[0]+(margin*width)-1).any():
+            new_labels[i] = 0
+        if (new_vertices[i][1::2] < -(margin*height)).any() or (new_vertices[i][1::2] > size[1]+(margin*height)-1).any():
+            new_labels[i] = 0            
     return new_vertices, new_labels
 
 
@@ -358,8 +382,23 @@ class SceneTextDataset(Dataset):
         self.vertices = []
         self.labels = []
 
+
+        self.transforms = []
+        for crop_size in [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]:
+            self.transforms.append(ComposedTransformation(
+                crop_aspect_ratio=1.0, crop_size=(crop_size, crop_size),
+                hflip=False, vflip=False, random_translate=True,
+                resize_to=512,
+                min_image_overlap=0.9, min_bbox_overlap=1.0, min_bbox_count=1, allow_partial_occurrence=False,
+                max_random_trials=100,
+                brightness=0.5, contrast=0.5, saturation=0.25, hue=0.25,
+                normalize=True, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5), to_tensor=False
+            ))
+
+        self.transform2 = CropMethod_1()
+
     def load_image(self):
-        for image_fname in self.image_fnames:
+        for image_fname in tqdm(self.image_fnames):
             image_fpath = osp.join(self.image_dir, image_fname)
             image = cv2.imread(image_fpath)
             image = cv2.cvtColor(image,cv2.COLOR_BGR2RGB)
@@ -386,18 +425,17 @@ class SceneTextDataset(Dataset):
         labels = self.labels[idx]
 
         image, vertices = adjust_height(image, vertices)
-        image, vertices = rotate_img(image, vertices)
-        if self.crop_size is not None:
-            image, vertices = crop_img(image, vertices, labels, self.crop_size)
+        image, vertices = rotate_img(image, vertices, angle_range=10)
 
-        funcs = []
-        if self.color_jitter:
-            funcs.append(A.ColorJitter(0.5, 0.5, 0.5, 0.25))
-        if self.normalize:
-            funcs.append(A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
-        transform = A.Compose(funcs)
+        trans = random.choice([0,1])
+        if trans==0:
+            transform = random.choice(self.transforms)
+            transformed = transform(image=image, word_bboxes=vertices.reshape(-1,4,2))
+            image = transformed['image']
+            vertices = transformed['word_bboxes']
+        else:
+            image, vertices, labels = self.transform2(image, vertices, labels)
 
-        image = transform(image=image)['image']
         word_bboxes = np.reshape(vertices, (-1, 4, 2))
         roi_mask = generate_roi_mask(image, vertices, labels)
 
@@ -417,7 +455,7 @@ class ValidSceneTextDataset(SceneTextDataset):
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)), ToTensorV2()])
     
     def load_image(self):
-        for image_fname in self.image_fnames:
+        for image_fname in tqdm(self.image_fnames):
             image_fpath = osp.join(self.image_dir, image_fname)
             image = cv2.imread(image_fpath)[:, :, ::-1]
             self.orig_sizes.append(image.shape[:2])
